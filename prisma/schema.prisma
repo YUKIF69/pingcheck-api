@@ -1,0 +1,63 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String        @id @default(uuid())
+  email        String        @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime      @default(now())
+  monitors     Monitor[]
+  subscription Subscription?
+}
+
+model Monitor {
+  id              String    @id @default(uuid())
+  userId          String
+  name            String
+  url             String
+  intervalMinutes Int       @default(5)
+  isActive        Boolean   @default(true)
+  isPublic        Boolean   @default(false)
+  slug            String?   @unique
+  createdAt       DateTime  @default(now())
+  user            User      @relation(fields: [userId], references: [id])
+  pingLogs        PingLog[]
+  alerts          Alert[]
+}
+
+model PingLog {
+  id         String   @id @default(uuid())
+  monitorId  String
+  statusCode Int?
+  responseMs Int
+  isUp       Boolean
+  checkedAt  DateTime @default(now())
+  monitor    Monitor  @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+}
+
+model Alert {
+  id           String    @id @default(uuid())
+  monitorId    String
+  status       String    @default("open")
+  firedAt      DateTime  @default(now())
+  lastFailedAt DateTime  @default(now())
+  resolvedAt   DateTime?
+  monitor      Monitor   @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+}
+
+model Subscription {
+  id               String    @id @default(uuid())
+  userId           String    @unique
+  stripeCustomerId String?
+  stripeSubId      String?
+  plan             String    @default("free")
+  status           String    @default("active")
+  expiresAt        DateTime?
+  user             User      @relation(fields: [userId], references: [id])
+}
