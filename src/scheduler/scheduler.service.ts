@@ -3,7 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PingGateway } from '../gateway/ping.gateway';
-import { Monitor } from '@prisma/client';
+import { Monitor } from '../../generated/prisma';
 
 @Injectable()
 export class SchedulerService {
