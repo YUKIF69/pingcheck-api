@@ -5,6 +5,8 @@ import { AuthModule } from './auth/auth.module';
 import { MonitorsModule } from './monitors/monitors.module';
 import { SchedulerModule } from './scheduler/scheduler.module';
 import { GatewayModule } from './gateway/gateway.module';
+import { StripeModule } from './stripe/stripe.module';
+import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
@@ -14,6 +16,8 @@ import { GatewayModule } from './gateway/gateway.module';
     MonitorsModule,
     SchedulerModule,
     GatewayModule,
+    StripeModule,
+    UsersModule,
   ],
 })
 export class AppModule {}

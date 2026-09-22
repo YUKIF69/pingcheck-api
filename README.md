@@ -107,3 +107,8 @@ Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
 - npx prisma dev --detach
 - npm run start:dev
 
+{
+"email": "test@test.com",
+"password": "123456",
+"name": "Test"
+}
