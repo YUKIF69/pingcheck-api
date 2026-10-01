@@ -42,6 +42,11 @@ export class MonitorsController {
     return this.monitors.getStats(userId, id);
   }
 
+  @Get('public/:slug')
+  async getPublicMonitor(@Param('slug') slug: string) {
+    return this.monitors.getPublicStats(slug);
+  }
+
   @Patch(':id')
   update(
     @GetUser('id') userId: string,

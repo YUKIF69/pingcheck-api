@@ -55,6 +55,46 @@ export class MonitorsService {
     return this.prisma.monitor.delete({ where: { id } });
   }
 
+  async getPublicStats(slug: string) {
+    const monitor = await this.prisma.monitor.findUnique({ where: { slug } });
+    if (!monitor) throw new NotFoundException('Monitor not found');
+    if (!monitor.isPublic)
+      throw new ForbiddenException('This monitor is not public');
+
+    const now = new Date();
+    const day = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const week = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const month = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    const logs = await this.prisma.pingLog.findMany({
+      where: { monitorId: monitor.id, checkedAt: { gte: month } },
+      orderBy: { checkedAt: 'asc' },
+    });
+
+    const calcUptime = (from: Date) => {
+      const filtered = logs.filter((l) => l.checkedAt >= from);
+      if (!filtered.length) return null;
+      return Math.round(
+        (filtered.filter((l) => l.isUp).length / filtered.length) * 100,
+      );
+    };
+
+    return {
+      monitor: {
+        name: monitor.name,
+        url: monitor.url,
+        intervalMinutes: monitor.intervalMinutes,
+      },
+      uptime24h: calcUptime(day),
+      uptime7d: calcUptime(week),
+      uptime30d: calcUptime(month),
+      incidents24h: logs.filter((l) => l.checkedAt >= day && !l.isUp).length,
+      incidents7d: logs.filter((l) => l.checkedAt >= week && !l.isUp).length,
+      incidents30d: logs.filter((l) => !l.isUp).length,
+      logs,
+    };
+  }
+
   async getStats(userId: string, id: string) {
     await this.findOne(userId, id); // перевірка що монітор належить юзеру
 
