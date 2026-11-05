@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import type { Request, Response } from 'express';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { rawBody: true });
@@ -21,6 +22,10 @@ async function bootstrap() {
     .build();
 
   SwaggerModule.setup('api', app, SwaggerModule.createDocument(app, config));
+
+  app.getHttpAdapter().get('/health', (_req: Request, res: Response) => {
+    res.json({ status: 'ok' });
+  });
 
   await app.listen(process.env.PORT || 4000);
 }
