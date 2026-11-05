@@ -12,7 +12,6 @@ export class SchedulerService {
   constructor(
     private prisma: PrismaService,
     private notifications: NotificationsService,
-    // Інжектуємо gateway щоб після кожного пінгу надсилати результат через WebSocket
     private gateway: PingGateway,
   ) {}
 
@@ -23,15 +22,24 @@ export class SchedulerService {
     });
 
     const now = new Date();
-
-    await Promise.all(
-      monitors
-        .filter((m) => {
-          // пінгуємо тільки якщо пройшло достатньо часу
-          return now.getMinutes() % m.intervalMinutes === 0;
-        })
-        .map((m) => this.pingMonitor(m)),
+    // Беремо лише монітори, яким зараз час пінгуватись
+    const due = monitors.filter(
+      (m) => now.getMinutes() % m.intervalMinutes === 0,
     );
+
+    const results = await Promise.allSettled(
+      due.map((m) => this.pingMonitor(m)),
+    );
+
+    // allSettled не кидає помилок, тому відхилені перевірки логуємо вручну
+    results.forEach((r, i) => {
+      if (r.status === 'rejected') {
+        this.logger.error(
+          `Ping failed for monitor ${due[i].id}`,
+          r.reason instanceof Error ? r.reason.stack : String(r.reason),
+        );
+      }
+    });
   }
 
   private async pingMonitor(monitor: Monitor) {
@@ -55,8 +63,6 @@ export class SchedulerService {
       data: { monitorId: monitor.id, statusCode, responseMs, isUp },
     });
 
-    // Після збереження в БД — одразу пушимо результат через WebSocket
-    // Всі підключені клієнти отримують оновлення без refresh
     this.gateway.sendMonitorUpdate({
       monitorId: monitor.id,
       isUp,
@@ -70,19 +76,32 @@ export class SchedulerService {
     );
   }
 
+  // Відправка листа, яка не може зламати перевірку: помилку лише логуємо
+  private async safeSend(monitorId: string, send: () => Promise<unknown>) {
+    try {
+      await send();
+    } catch (err) {
+      this.logger.error(
+        `Email failed for monitor ${monitorId}`,
+        err instanceof Error ? err.stack : String(err),
+      );
+    }
+  }
+
   private async handleAlert(monitor: Monitor, isUp: boolean) {
     const lastAlert = await this.prisma.alert.findFirst({
       where: { monitorId: monitor.id, status: 'open' },
     });
 
+    // TODO (раунд 3): брати email власника монітора замість хардкоду
+    const to = 'yyukif69@gmail.com';
+
     if (!isUp && !lastAlert) {
       await this.prisma.alert.create({
         data: { monitorId: monitor.id, status: 'open' },
       });
-      await this.notifications.sendDownAlert(
-        'yyukif69@gmail.com',
-        monitor.name,
-        monitor.url,
+      await this.safeSend(monitor.id, () =>
+        this.notifications.sendDownAlert(to, monitor.name, monitor.url),
       );
     }
 
@@ -91,10 +110,8 @@ export class SchedulerService {
         where: { id: lastAlert.id },
         data: { status: 'resolved', resolvedAt: new Date() },
       });
-      await this.notifications.sendRecoveryAlert(
-        'yyukif69@gmail.com',
-        monitor.name,
-        monitor.url,
+      await this.safeSend(monitor.id, () =>
+        this.notifications.sendRecoveryAlert(to, monitor.name, monitor.url),
       );
     }
   }

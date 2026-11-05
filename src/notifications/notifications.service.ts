@@ -14,7 +14,7 @@ export class NotificationsService {
 
   // Надсилає email коли сайт впав
   async sendDownAlert(to: string, monitorName: string, url: string) {
-    await this.resend.emails.send({
+    const { error } = await this.resend.emails.send({
       from: this.config.getOrThrow<string>('RESEND_FROM'),
       to,
       subject: `🔴 ${monitorName} is DOWN`,
@@ -24,12 +24,13 @@ export class NotificationsService {
         <p>We'll notify you when it recovers.</p>
       `,
     });
+    if (error) throw new Error(`Resend: ${error.message}`);
     this.logger.warn(`Down alert sent to ${to} for ${monitorName}`);
   }
 
   // Надсилає email коли сайт відновився
   async sendRecoveryAlert(to: string, monitorName: string, url: string) {
-    await this.resend.emails.send({
+    const { error } = await this.resend.emails.send({
       from: this.config.getOrThrow<string>('RESEND_FROM'),
       to,
       subject: `🟢 ${monitorName} is back UP`,
@@ -38,6 +39,7 @@ export class NotificationsService {
         <p><strong>${monitorName}</strong> (${url}) is responding again.</p>
       `,
     });
+    if (error) throw new Error(`Resend: ${error.message}`);
     this.logger.log(`Recovery alert sent to ${to} for ${monitorName}`);
   }
 }

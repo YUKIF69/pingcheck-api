@@ -7,11 +7,44 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CreateMonitorDto } from './dto/create-monitor.dto';
 import { UpdateMonitorDto } from './dto/update-monitor.dto';
 
+const FREE_MAX_MONITORS = 3;
+const FREE_MIN_INTERVAL_MINUTES = 5;
+
 @Injectable()
 export class MonitorsService {
   constructor(private prisma: PrismaService) {}
 
+  // Перевіряє ліміти тарифу. Premium проходить без обмежень
+  private async assertPlanLimits(
+    userId: string,
+    intervalMinutes: number,
+    checkCount: boolean,
+  ) {
+    const sub = await this.prisma.subscription.findUnique({
+      where: { userId },
+    });
+    if (sub?.plan === 'premium' && sub.status === 'active') return;
+
+    if (intervalMinutes < FREE_MIN_INTERVAL_MINUTES) {
+      throw new ForbiddenException('Free plan: minimum interval is 5 minutes');
+    }
+    if (checkCount) {
+      const count = await this.prisma.monitor.count({ where: { userId } });
+      if (count >= FREE_MAX_MONITORS) {
+        throw new ForbiddenException('Free plan: up to 3 monitors');
+      }
+    }
+  }
+
+  // Рахує інциденти (записи Alert) від вказаної дати, а не окремі невдалі пінги
+  private countIncidents(monitorId: string, since: Date) {
+    return this.prisma.alert.count({
+      where: { monitorId, firedAt: { gte: since } },
+    });
+  }
+
   async create(userId: string, dto: CreateMonitorDto) {
+    await this.assertPlanLimits(userId, dto.intervalMinutes ?? 5, true);
     return this.prisma.monitor.create({
       data: {
         userId,
@@ -29,11 +62,7 @@ export class MonitorsService {
       where: { userId },
       orderBy: { createdAt: 'desc' },
       include: {
-        // Включаємо тільки останній pingLog для кожного монітора
-        pingLogs: {
-          orderBy: { checkedAt: 'desc' },
-          take: 1,
-        },
+        pingLogs: { orderBy: { checkedAt: 'desc' }, take: 1 },
       },
     });
   }
@@ -46,7 +75,15 @@ export class MonitorsService {
   }
 
   async update(userId: string, id: string, dto: UpdateMonitorDto) {
-    await this.findOne(userId, id);
+    // Спочатку перевіряємо власника, потім ліміти
+    const monitor = await this.findOne(userId, id);
+    // Ліміт перевіряємо лише якщо інтервал реально змінюється
+    if (
+      dto.intervalMinutes !== undefined &&
+      dto.intervalMinutes !== monitor.intervalMinutes
+    ) {
+      await this.assertPlanLimits(userId, dto.intervalMinutes, false);
+    }
     return this.prisma.monitor.update({ where: { id }, data: dto });
   }
 
@@ -61,52 +98,32 @@ export class MonitorsService {
     if (!monitor.isPublic)
       throw new ForbiddenException('This monitor is not public');
 
-    const now = new Date();
-    const day = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    const week = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const month = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-    const logs = await this.prisma.pingLog.findMany({
-      where: { monitorId: monitor.id, checkedAt: { gte: month } },
-      orderBy: { checkedAt: 'asc' },
-    });
-
-    const calcUptime = (from: Date) => {
-      const filtered = logs.filter((l) => l.checkedAt >= from);
-      if (!filtered.length) return null;
-      return Math.round(
-        (filtered.filter((l) => l.isUp).length / filtered.length) * 100,
-      );
-    };
-
+    const stats = await this.buildStats(monitor.id);
     return {
       monitor: {
         name: monitor.name,
         url: monitor.url,
         intervalMinutes: monitor.intervalMinutes,
       },
-      uptime24h: calcUptime(day),
-      uptime7d: calcUptime(week),
-      uptime30d: calcUptime(month),
-      incidents24h: logs.filter((l) => l.checkedAt >= day && !l.isUp).length,
-      incidents7d: logs.filter((l) => l.checkedAt >= week && !l.isUp).length,
-      incidents30d: logs.filter((l) => !l.isUp).length,
-      logs,
+      ...stats,
     };
   }
 
   async getStats(userId: string, id: string) {
-    await this.findOne(userId, id); // перевірка що монітор належить юзеру
-
-    const now = new Date();
-    const day = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    const week = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const month = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
     const monitor = await this.findOne(userId, id);
+    const stats = await this.buildStats(id);
+    return { monitor, ...stats };
+  }
 
-    // Всі логи за 30 днів для графіка
+  // Спільна логіка статистики для приватної та публічної сторінок
+  private async buildStats(monitorId: string) {
+    const now = Date.now();
+    const day = new Date(now - 24 * 60 * 60 * 1000);
+    const week = new Date(now - 7 * 24 * 60 * 60 * 1000);
+    const month = new Date(now - 30 * 24 * 60 * 60 * 1000);
+
     const logs = await this.prisma.pingLog.findMany({
-      where: { monitorId: id, checkedAt: { gte: month } },
+      where: { monitorId, checkedAt: { gte: month } },
       orderBy: { checkedAt: 'asc' },
     });
 
@@ -118,24 +135,20 @@ export class MonitorsService {
       );
     };
 
-    // Кількість падінь за 24h
-    const incidents24h = logs.filter(
-      (l) => l.checkedAt >= day && !l.isUp,
-    ).length;
-    const incidents7d = logs.filter(
-      (l) => l.checkedAt >= week && !l.isUp,
-    ).length;
-    const incidents30d = logs.filter((l) => !l.isUp).length; // вже за 30д
+    const [incidents24h, incidents7d, incidents30d] = await Promise.all([
+      this.countIncidents(monitorId, day),
+      this.countIncidents(monitorId, week),
+      this.countIncidents(monitorId, month),
+    ]);
 
     return {
-      monitor,
       uptime24h: calcUptime(day),
       uptime7d: calcUptime(week),
       uptime30d: calcUptime(month),
       incidents24h,
       incidents7d,
       incidents30d,
-      logs, // для графіка
+      logs,
     };
   }
 }
