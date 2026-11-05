@@ -15,8 +15,6 @@ import { UpdateMonitorDto } from './dto/update-monitor.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { GetUser } from '../auth/get-user.decorator';
 
-@ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
 @ApiTags('monitors')
 @Controller('monitors')
 export class MonitorsController {
