@@ -1,9 +1,10 @@
 import { Module } from '@nestjs/common';
+import { AuthModule } from '../auth/auth.module';
 import { PingGateway } from './ping.gateway';
 
-// Реєструє PingGateway як provider — NestJS сам керує WebSocket сервером
 @Module({
+  imports: [AuthModule],
   providers: [PingGateway],
-  exports: [PingGateway], // експортуємо щоб SchedulerService міг його використовувати
+  exports: [PingGateway],
 })
 export class GatewayModule {}

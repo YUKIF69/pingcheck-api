@@ -4,6 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PingGateway } from '../gateway/ping.gateway';
 import { Monitor } from '@prisma/client';
+import { safeFetch } from 'src/common/safe-fetch';
 
 @Injectable()
 export class SchedulerService {
@@ -48,11 +49,10 @@ export class SchedulerService {
     let statusCode: number | null = null;
 
     try {
-      const response = await fetch(monitor.url, {
-        signal: AbortSignal.timeout(10000),
-      });
+      const response = await safeFetch(monitor.url);
       statusCode = response.status;
       isUp = response.ok;
+      await response.body?.cancel(); // не вантажимо тіло сторінки
     } catch {
       isUp = false;
     }
@@ -63,7 +63,7 @@ export class SchedulerService {
       data: { monitorId: monitor.id, statusCode, responseMs, isUp },
     });
 
-    this.gateway.sendMonitorUpdate({
+    this.gateway.sendMonitorUpdate(monitor.userId, {
       monitorId: monitor.id,
       isUp,
       responseMs,

@@ -2,10 +2,12 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateMonitorDto } from './dto/create-monitor.dto';
 import { UpdateMonitorDto } from './dto/update-monitor.dto';
+import { assertPublicUrl, UnsafeUrlError } from '../common/safe-fetch';
 
 const FREE_MAX_MONITORS = 3;
 const FREE_MIN_INTERVAL_MINUTES = 5;
@@ -13,6 +15,16 @@ const FREE_MIN_INTERVAL_MINUTES = 5;
 @Injectable()
 export class MonitorsService {
   constructor(private prisma: PrismaService) {}
+
+  private async validateUrl(url: string) {
+    try {
+      await assertPublicUrl(url);
+    } catch (err) {
+      if (err instanceof UnsafeUrlError)
+        throw new BadRequestException(err.message);
+      throw err;
+    }
+  }
 
   // Перевіряє ліміти тарифу. Premium проходить без обмежень
   private async assertPlanLimits(
@@ -44,6 +56,7 @@ export class MonitorsService {
   }
 
   async create(userId: string, dto: CreateMonitorDto) {
+    await this.validateUrl(dto.url);
     await this.assertPlanLimits(userId, dto.intervalMinutes ?? 5, true);
     return this.prisma.monitor.create({
       data: {
@@ -75,9 +88,8 @@ export class MonitorsService {
   }
 
   async update(userId: string, id: string, dto: UpdateMonitorDto) {
-    // Спочатку перевіряємо власника, потім ліміти
+    if (dto.url) await this.validateUrl(dto.url);
     const monitor = await this.findOne(userId, id);
-    // Ліміт перевіряємо лише якщо інтервал реально змінюється
     if (
       dto.intervalMinutes !== undefined &&
       dto.intervalMinutes !== monitor.intervalMinutes
