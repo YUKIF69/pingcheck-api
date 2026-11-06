@@ -16,16 +16,6 @@ const FREE_MIN_INTERVAL_MINUTES = 5;
 export class MonitorsService {
   constructor(private prisma: PrismaService) {}
 
-  private async validateUrl(url: string) {
-    try {
-      await assertPublicUrl(url);
-    } catch (err) {
-      if (err instanceof UnsafeUrlError)
-        throw new BadRequestException(err.message);
-      throw err;
-    }
-  }
-
   // Перевіряє ліміти тарифу. Premium проходить без обмежень
   private async assertPlanLimits(
     userId: string,
@@ -35,7 +25,7 @@ export class MonitorsService {
     const sub = await this.prisma.subscription.findUnique({
       where: { userId },
     });
-    if (sub?.plan === 'premium' && sub.status === 'active') return;
+    if (sub?.plan === 'premium') return;
 
     if (intervalMinutes < FREE_MIN_INTERVAL_MINUTES) {
       throw new ForbiddenException('Free plan: minimum interval is 5 minutes');
@@ -85,6 +75,16 @@ export class MonitorsService {
     if (!monitor) throw new NotFoundException('Monitor not found');
     if (monitor.userId !== userId) throw new ForbiddenException();
     return monitor;
+  }
+
+  private async validateUrl(url: string) {
+    try {
+      await assertPublicUrl(url);
+    } catch (err) {
+      if (err instanceof UnsafeUrlError)
+        throw new BadRequestException(err.message);
+      throw err;
+    }
   }
 
   async update(userId: string, id: string, dto: UpdateMonitorDto) {

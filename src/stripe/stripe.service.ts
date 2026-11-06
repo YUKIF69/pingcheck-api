@@ -42,40 +42,50 @@ export class StripeService {
     return { url: session.url };
   }
 
-  // Обробляє webhook від Stripe — викликається коли оплата успішна
   async handleWebhook(payload: Buffer, signature: string) {
-    const webhookSecret = this.config.getOrThrow('STRIPE_WEBHOOK_SECRET');
-
-    // Верифікуємо підпис — захист від фейкових запитів
+    const webhookSecret = this.config.getOrThrow<string>(
+      'STRIPE_WEBHOOK_SECRET',
+    );
     const event = this.stripe.webhooks.constructEvent(
       payload,
       signature,
       webhookSecret,
     );
 
-    if (event.type === 'checkout.session.completed') {
-      const session = event.data.object as Stripe.Checkout.Session;
-      const userId = session.metadata?.userId;
-
-      if (userId) {
-        // Оновлюємо підписку юзера в БД
+    switch (event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object as Stripe.Checkout.Session;
+        const userId = session.metadata?.userId;
+        if (!userId) break;
+        const data = {
+          stripeCustomerId: session.customer as string,
+          stripeSubId: session.subscription as string,
+          plan: 'premium',
+          status: 'active',
+        };
         await this.prisma.subscription.upsert({
           where: { userId },
-          create: {
-            userId,
-            stripeCustomerId: session.customer as string,
-            stripeSubId: session.subscription as string,
-            plan: 'premium',
-            status: 'active',
-          },
-          update: {
-            stripeCustomerId: session.customer as string,
-            stripeSubId: session.subscription as string,
-            plan: 'premium',
-            status: 'active',
-          },
+          create: { userId, ...data },
+          update: data,
         });
+        break;
       }
+      // Підписку оновили або скасували: синхронізуємо план з БД
+      case 'customer.subscription.updated':
+      case 'customer.subscription.deleted':
+        await this.syncSubscription(event.data.object as Stripe.Subscription);
+        break;
     }
+  }
+
+  // Premium лишається, поки підписка активна, на пробному періоді або Stripe ще повторює платіж (past_due)
+  private async syncSubscription(sub: Stripe.Subscription) {
+    const keepsPremium = ['active', 'trialing', 'past_due'].includes(
+      sub.status,
+    );
+    await this.prisma.subscription.updateMany({
+      where: { stripeSubId: sub.id },
+      data: { plan: keepsPremium ? 'premium' : 'free', status: sub.status },
+    });
   }
 }

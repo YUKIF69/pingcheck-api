@@ -4,7 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PingGateway } from '../gateway/ping.gateway';
 import { Monitor } from '@prisma/client';
-import { safeFetch } from 'src/common/safe-fetch';
+import { safeFetch } from '../common/safe-fetch';
 
 @Injectable()
 export class SchedulerService {
@@ -41,6 +41,15 @@ export class SchedulerService {
         );
       }
     });
+  }
+
+  @Cron(CronExpression.EVERY_DAY_AT_3AM)
+  async cleanupOldLogs() {
+    const cutoff = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+    const { count } = await this.prisma.pingLog.deleteMany({
+      where: { checkedAt: { lt: cutoff } },
+    });
+    this.logger.log(`Deleted ${count} old ping logs`);
   }
 
   private async pingMonitor(monitor: Monitor) {
@@ -93,16 +102,22 @@ export class SchedulerService {
       where: { monitorId: monitor.id, status: 'open' },
     });
 
-    // TODO (раунд 3): брати email власника монітора замість хардкоду
-    const to = 'yyukif69@gmail.com';
+    // Email власника монітора береться з БД
+    const owner = await this.prisma.user.findUnique({
+      where: { id: monitor.userId },
+      select: { email: true },
+    });
+    const to = owner?.email;
 
     if (!isUp && !lastAlert) {
       await this.prisma.alert.create({
         data: { monitorId: monitor.id, status: 'open' },
       });
-      await this.safeSend(monitor.id, () =>
-        this.notifications.sendDownAlert(to, monitor.name, monitor.url),
-      );
+      if (to) {
+        await this.safeSend(monitor.id, () =>
+          this.notifications.sendDownAlert(to, monitor.name, monitor.url),
+        );
+      }
     }
 
     if (isUp && lastAlert) {
@@ -110,9 +125,11 @@ export class SchedulerService {
         where: { id: lastAlert.id },
         data: { status: 'resolved', resolvedAt: new Date() },
       });
-      await this.safeSend(monitor.id, () =>
-        this.notifications.sendRecoveryAlert(to, monitor.name, monitor.url),
-      );
+      if (to) {
+        await this.safeSend(monitor.id, () =>
+          this.notifications.sendRecoveryAlert(to, monitor.name, monitor.url),
+        );
+      }
     }
   }
 }
