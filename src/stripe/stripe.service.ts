@@ -1,7 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
-/* eslint-disable @typescript-eslint/no-unsafe-call */
-/* eslint-disable @typescript-eslint/no-unsafe-member-access */
-
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
@@ -54,7 +50,7 @@ export class StripeService {
 
     switch (event.type) {
       case 'checkout.session.completed': {
-        const session = event.data.object as Stripe.Checkout.Session;
+        const session = event.data.object;
         const userId = session.metadata?.userId;
         if (!userId) break;
         const data = {
@@ -73,7 +69,7 @@ export class StripeService {
       // Підписку оновили або скасували: синхронізуємо план з БД
       case 'customer.subscription.updated':
       case 'customer.subscription.deleted':
-        await this.syncSubscription(event.data.object as Stripe.Subscription);
+        await this.syncSubscription(event.data.object);
         break;
     }
   }

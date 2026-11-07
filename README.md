@@ -32,6 +32,16 @@ Env variables: `DATABASE_URL`, `JWT_SECRET`, `FRONTEND_URL`, `RESEND_API_KEY`, `
 
 Stripe webhook locally: `stripe listen --forward-to localhost:4000/stripe/webhook`
 
+![CI](https://github.com/YUKIF69/pingcheck-api/actions/workflows/ci.yml/badge.svg)
+
+## Tests
+
+```bash
+npm test
+```
+
+Unit tests cover the security-critical parts: SSRF protection (private/reserved addresses, redirects), Free/Premium plan limits and monitor ownership. CI runs lint, build and tests on every push.
+
 ## Security notes and known limitations
 
 **Implemented:**
