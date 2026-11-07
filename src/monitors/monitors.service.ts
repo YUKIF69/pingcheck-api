@@ -61,12 +61,36 @@ export class MonitorsService {
   }
 
   async findAll(userId: string) {
-    return this.prisma.monitor.findMany({
+    const monitors = await this.prisma.monitor.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
-      include: {
-        pingLogs: { orderBy: { checkedAt: 'desc' }, take: 1 },
-      },
+      // 30 останніх пінгів для міні-графіка на картці
+      include: { pingLogs: { orderBy: { checkedAt: 'desc' }, take: 30 } },
+    });
+
+    // Реальний uptime за 24h рахуємо в БД двома агрегатними запитами на всі монітори одразу
+    const ids = monitors.map((m) => m.id);
+    const day = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const where = { monitorId: { in: ids }, checkedAt: { gte: day } };
+    const [totals, ups] = await Promise.all([
+      this.prisma.pingLog.groupBy({
+        by: ['monitorId'],
+        where,
+        _count: { _all: true },
+      }),
+      this.prisma.pingLog.groupBy({
+        by: ['monitorId'],
+        where: { ...where, isUp: true },
+        _count: { _all: true },
+      }),
+    ]);
+    const totalBy = new Map(totals.map((t) => [t.monitorId, t._count._all]));
+    const upBy = new Map(ups.map((u) => [u.monitorId, u._count._all]));
+
+    return monitors.map((m) => {
+      const total = totalBy.get(m.id) ?? 0;
+      const up = upBy.get(m.id) ?? 0;
+      return { ...m, uptime24h: total ? Math.round((up / total) * 100) : null };
     });
   }
 
@@ -134,18 +158,47 @@ export class MonitorsService {
     const week = new Date(now - 7 * 24 * 60 * 60 * 1000);
     const month = new Date(now - 30 * 24 * 60 * 60 * 1000);
 
-    const logs = await this.prisma.pingLog.findMany({
-      where: { monitorId, checkedAt: { gte: month } },
-      orderBy: { checkedAt: 'asc' },
-    });
+    const [counts, buckets, last] = await Promise.all([
+      // Один запит рахує і total, і up одразу для трьох періодів
+      this.prisma.$queryRaw<
+        {
+          t24: number;
+          u24: number;
+          t7: number;
+          u7: number;
+          t30: number;
+          u30: number;
+        }[]
+      >`
+      SELECT
+        COUNT(*) FILTER (WHERE "checkedAt" >= ${day})::int AS t24,
+        COUNT(*) FILTER (WHERE "checkedAt" >= ${day} AND "isUp")::int AS u24,
+        COUNT(*) FILTER (WHERE "checkedAt" >= ${week})::int AS t7,
+        COUNT(*) FILTER (WHERE "checkedAt" >= ${week} AND "isUp")::int AS u7,
+        COUNT(*)::int AS t30,
+        COUNT(*) FILTER (WHERE "isUp")::int AS u30
+      FROM "PingLog"
+      WHERE "monitorId" = ${monitorId} AND "checkedAt" >= ${month}`,
+      // Групуємо пінги по годинах: ~720 точок за 30 днів замість десятків тисяч
+      this.prisma.$queryRaw<
+        { bucket: Date; avgMs: number; total: number; up: number }[]
+      >`
+      SELECT date_trunc('hour', "checkedAt") AS bucket,
+             AVG("responseMs")::int AS "avgMs",
+             COUNT(*)::int AS total,
+             COUNT(*) FILTER (WHERE "isUp")::int AS up
+      FROM "PingLog"
+      WHERE "monitorId" = ${monitorId} AND "checkedAt" >= ${month}
+      GROUP BY bucket ORDER BY bucket`,
+      this.prisma.pingLog.findFirst({
+        where: { monitorId },
+        orderBy: { checkedAt: 'desc' },
+      }),
+    ]);
 
-    const calcUptime = (from: Date) => {
-      const filtered = logs.filter((l) => l.checkedAt >= from);
-      if (!filtered.length) return null;
-      return Math.round(
-        (filtered.filter((l) => l.isUp).length / filtered.length) * 100,
-      );
-    };
+    const c = counts[0];
+    const pct = (up: number, total: number) =>
+      total ? Math.round((up / total) * 100) : null;
 
     const [incidents24h, incidents7d, incidents30d] = await Promise.all([
       this.countIncidents(monitorId, day),
@@ -154,13 +207,30 @@ export class MonitorsService {
     ]);
 
     return {
-      uptime24h: calcUptime(day),
-      uptime7d: calcUptime(week),
-      uptime30d: calcUptime(month),
+      uptime24h: pct(c.u24, c.t24),
+      uptime7d: pct(c.u7, c.t7),
+      uptime30d: pct(c.u30, c.t30),
       incidents24h,
       incidents7d,
       incidents30d,
-      logs,
+      // Остання перевірка для статусу; null, якщо пінгів ще не було
+      lastCheck: last
+        ? {
+            isUp: last.isUp,
+            responseMs: last.responseMs,
+            checkedAt: last.checkedAt,
+          }
+        : null,
+      // Смужка "Last 24h": одна година дорівнює одному бару, червоний, якщо в цю годину були падіння
+      bars24h: buckets
+        .filter((b) => b.bucket >= day)
+        .map((b) => ({ isUp: b.up === b.total })),
+      // Точки для графіка (годинні середні)
+      chart: buckets.map((b) => ({
+        checkedAt: b.bucket.toISOString(),
+        responseMs: b.avgMs,
+        isUp: b.up > 0,
+      })),
     };
   }
 }
